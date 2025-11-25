@@ -3,21 +3,31 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { FileData } from './types';
-import { initializeFirebase } from '@/firebase/server';
+import { initializeApp, getApps, App, cert } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
+
+// --- Firebase Admin SDK Initialization ---
+// This block ensures the Admin SDK is initialized only once.
+let app: App;
+if (!getApps().length) {
+  // In a real production environment, you would use a more secure way to handle credentials,
+  // such as environment variables or a secret manager. For this demo, we use a static user ID.
+  app = initializeApp();
+} else {
+  app = getApps()[0];
+}
+
+const firestore = getFirestore(app);
+const storage = getStorage(app).bucket(process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET);
+
+// For this demo app, we'll use a static user ID for all server operations.
+// In a real multi-user app, you would get this from a server-side session.
+const userId = "default-user";
 
 const ITEMS_PER_PAGE = 10;
 
-// On the server, we can't rely on a client-side `currentUser`.
-// For this app, we'll use a static user ID for all server operations.
-// In a real multi-user app, you'd get this from a server-side session.
-async function getUserId() {
-  return "default-user";
-}
-
 export async function getFiles({ page = 1 }: { page: number }) {
-  const { firestore } = await initializeFirebase();
-  const userId = await getUserId();
-
   const filesCollection = firestore.collection(`users/${userId}/files`);
   const q = filesCollection.orderBy('uploadedAt', 'desc');
 
@@ -54,9 +64,6 @@ const fileSchema = z.object({
 
 
 export async function uploadFile(prevState: any, formData: FormData) {
-  const { storage, firestore } = await initializeFirebase();
-  const userId = await getUserId();
-  
   const validatedFields = fileSchema.safeParse({
     file: formData.get('file'),
   });
@@ -105,8 +112,6 @@ export async function uploadFile(prevState: any, formData: FormData) {
 }
 
 export async function deleteFile(fileId: string) {
-  const { firestore, storage } = await initializeFirebase();
-  const userId = await getUserId();
   const fileDocRef = firestore.doc(`users/${userId}/files/${fileId}`);
 
   try {
