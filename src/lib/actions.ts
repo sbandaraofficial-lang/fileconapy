@@ -4,16 +4,6 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { FileData } from './types';
 import { initializeFirebase } from '@/firebase/server';
-import { 
-  collection, 
-  addDoc, 
-  getDocs, 
-  query, 
-  orderBy, 
-  doc, 
-  deleteDoc,
-  getDoc
-} from 'firebase-admin/firestore';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -28,10 +18,10 @@ export async function getFiles({ page = 1 }: { page: number }) {
   const { firestore } = initializeFirebase();
   const userId = await getUserId();
 
-  const filesCollection = collection(firestore, 'users', userId, 'files');
-  const q = query(filesCollection, orderBy('uploadedAt', 'desc'));
+  const filesCollection = firestore.collection(`users/${userId}/files`);
+  const q = filesCollection.orderBy('uploadedAt', 'desc');
 
-  const snapshot = await getDocs(q);
+  const snapshot = await q.get();
   
   const files: FileData[] = snapshot.docs.map(doc => {
     const data = doc.data();
@@ -95,7 +85,6 @@ export async function uploadFile(prevState: any, formData: FormData) {
     await fileRef.makePublic();
     const downloadURL = fileRef.publicUrl();
 
-    // Use a simpler object for Firestore, without client-side properties like `url`.
     const newFile = {
       userId,
       name: file.name,
@@ -105,7 +94,7 @@ export async function uploadFile(prevState: any, formData: FormData) {
       storagePath: filePath, // Store the path for future deletions
     };
 
-    await addDoc(collection(firestore, 'users', userId, 'files'), newFile);
+    await firestore.collection(`users/${userId}/files`).add(newFile);
 
     revalidatePath('/');
     return { message: `Successfully uploaded "${file.name}"`, success: true };
@@ -118,25 +107,22 @@ export async function uploadFile(prevState: any, formData: FormData) {
 export async function deleteFile(fileId: string) {
   const { firestore, storage } = initializeFirebase();
   const userId = await getUserId();
-  const fileDocRef = doc(firestore, 'users', userId, 'files', fileId);
+  const fileDocRef = firestore.doc(`users/${userId}/files/${fileId}`);
 
   try {
-    const fileDoc = await getDoc(fileDocRef);
+    const fileDoc = await fileDocRef.get();
     if (!fileDoc.exists) {
       return { success: false, message: 'File not found.' };
     }
     
     const fileData = fileDoc.data();
-    const storagePath = fileData.storagePath;
-
-    // Delete the file from Cloud Storage if path is known
-    if (storagePath) {
+    if (fileData && fileData.storagePath) {
+      const storagePath = fileData.storagePath;
       const fileRef = storage.file(storagePath);
       await fileRef.delete();
     }
     
-    // Delete the Firestore document
-    await deleteDoc(fileDocRef);
+    await fileDocRef.delete();
 
     revalidatePath('/');
     return { success: true, message: `File has been deleted.` };
