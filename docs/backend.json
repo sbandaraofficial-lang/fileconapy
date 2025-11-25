@@ -1,0 +1,119 @@
+{
+  "entities": {
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user of the FileHaven application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the user entity."
+        },
+        "email": {
+          "type": "string",
+          "description": "User's email address.",
+          "format": "email"
+        },
+        "username": {
+          "type": "string",
+          "description": "User's username."
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "username"
+      ]
+    },
+    "File": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "File",
+      "type": "object",
+      "description": "Represents a file stored in the FileHaven application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the file entity."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Reference to User. (Relationship: User 1:N File)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the file."
+        },
+        "size": {
+          "type": "number",
+          "description": "Size of the file in bytes."
+        },
+        "uploadDate": {
+          "type": "string",
+          "description": "Date and time when the file was uploaded.",
+          "format": "date-time"
+        },
+        "storageUrl": {
+          "type": "string",
+          "description": "URL of the file in Firebase Cloud Storage.",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "name",
+        "size",
+        "uploadDate",
+        "storageUrl"
+      ]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/users/{userId}",
+        "definition": {
+          "entityName": "User",
+          "schema": {
+            "$ref": "#/backend/entities/User"
+          },
+          "description": "Stores user profile information.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier for the user."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/users/{userId}/files/{fileId}",
+        "definition": {
+          "entityName": "File",
+          "schema": {
+            "$ref": "#/backend/entities/File"
+          },
+          "description": "Stores file metadata. Requires userId from parent path. Path-based ownership for access control.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier for the user (owner of the file)."
+            },
+            {
+              "name": "fileId",
+              "description": "The unique identifier for the file."
+            }
+          ]
+        }
+      }
+    ],
+    "reasoning": "The Firestore structure is designed to ensure secure and scalable file storage for FileHaven, adhering to the principles of Authorization Independence, Structural Segregation, and Access Modeling.  Each user has a dedicated subcollection for their files, enabling path-based ownership and simplified security rules. \n\nAuthorization Independence:\nThe structure avoids hierarchical authorization dependencies by storing files in subcollections of user documents. This eliminates the need for `get()` calls in security rules to check parent document data (user information), enabling atomic operations and easier debugging.  User's files are accessed directly through the path `/users/{userId}/files/{fileId}`, making authorization rules straightforward.\n\nQAPs (Rules are not Filters):\nThis design facilitates secure list operations (QAPs) because each user's files are stored in a dedicated subcollection (`/users/{userId}/files`). Security rules can easily enforce that a user can only list files within their own subcollection, preventing unauthorized access to other users' files. The path-based ownership model also makes it easy to implement pagination and filtering without compromising security.\n\nStructural Segregation:\nUser data and file data are stored in separate collections. This segregation aligns with different access requirements. User profiles might have different access control needs than individual files. By separating them, we maintain a homogeneous security posture within each collection. All documents within `/users/{userId}/files}` will have the same access rules (owned by the user).\n\nAccess Modeling:\nThe structure uses path-based ownership (`/users/{userId}/files/{fileId}`) for managing file access. This approach is secure, efficient, and easy to understand.  It aligns with the \"User 1:N File\" relationship, ensuring that only the owner (user) can access their files."
+  }
+}
