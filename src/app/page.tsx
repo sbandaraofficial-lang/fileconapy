@@ -1,12 +1,17 @@
 import { getFiles } from '@/lib/actions';
 import FileList from '@/components/file-list';
 import FileUploadButton from '@/components/file-upload-button';
+import { Suspense } from 'react';
 
 export const dynamic = 'force-dynamic'; // Ensure page is re-rendered on data changes
 
+async function Files({ currentPage }: { currentPage: number }) {
+  const { files, totalPages } = await getFiles({ page: currentPage });
+  return <FileList files={files} currentPage={currentPage} totalPages={totalPages} />;
+}
+
 export default async function Home({ searchParams }: { searchParams?: { page?: string } }) {
   const currentPage = Number(searchParams?.page) || 1;
-  const { files, totalPages } = await getFiles({ page: currentPage });
 
   return (
     <div className="min-h-screen bg-background">
@@ -21,7 +26,9 @@ export default async function Home({ searchParams }: { searchParams?: { page?: s
         </div>
       </header>
       <main className="container mx-auto p-4 sm:p-6 lg:p-8">
-        <FileList files={files} currentPage={currentPage} totalPages={totalPages} />
+        <Suspense fallback={<div>Loading...</div>}>
+          <Files currentPage={currentPage} />
+        </Suspense>
       </main>
     </div>
   );

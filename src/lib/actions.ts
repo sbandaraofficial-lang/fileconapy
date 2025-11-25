@@ -4,20 +4,28 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { FileData } from './types';
 import { initializeFirebase } from '@/firebase/server';
-import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit, startAfter, getCountFromServer, doc, deleteDoc, where } from 'firebase/firestore';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getDownloadURL, deleteObject } from 'firebase/storage';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  getDocs, 
+  query, 
+  orderBy, 
+  limit, 
+  getCountFromServer, 
+  doc, 
+  deleteDoc,
+  getDoc
+} from 'firebase/firestore';
 
 const ITEMS_PER_PAGE = 10;
 
+// On the server, we can't rely on a client-side `currentUser`.
+// For this app, we'll use a static user ID for all server operations.
+// In a real multi-user app, you'd get this from a server-side session.
 async function getUserId() {
-  const { auth } = initializeFirebase();
-  let user = auth.currentUser;
-  if (!user) {
-    const userCredential = await signInAnonymously(auth);
-    user = userCredential.user;
-  }
-  return user.uid;
+  return "default-user";
 }
 
 export async function getFiles({ page = 1 }: { page: number }) {
@@ -25,7 +33,7 @@ export async function getFiles({ page = 1 }: { page: number }) {
   const userId = await getUserId();
 
   const filesCollection = collection(firestore, 'users', userId, 'files');
-  const q = query(filesCollection, orderBy('uploadedAt', 'desc'), limit(ITEMS_PER_PAGE * page));
+  const q = query(filesCollection, orderBy('uploadedAt', 'desc'));
 
   const snapshot = await getDocs(q);
   
@@ -35,13 +43,13 @@ export async function getFiles({ page = 1 }: { page: number }) {
       id: doc.id,
       name: data.name,
       size: data.size,
-      uploadedAt: data.uploadedAt.toDate(),
+      // Firestore Timestamps need to be converted to Dates
+      uploadedAt: data.uploadedAt.toDate(), 
       url: data.storageUrl,
     };
   });
 
-  const totalFilesSnapshot = await getCountFromServer(collection(firestore, 'users', userId, 'files'));
-  const totalFiles = totalFilesSnapshot.data().count;
+  const totalFiles = files.length;
   
   const paginatedFiles = files.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
 
@@ -77,17 +85,28 @@ export async function uploadFile(prevState: any, formData: FormData) {
   const { file } = validatedFields.data;
 
   try {
-    const storageRef = ref(storage, `users/${userId}/${Date.now()}-${file.name}`);
-    const uploadResult = await uploadBytes(storageRef, file);
-    const downloadURL = await getDownloadURL(uploadResult.ref);
+    const filePath = `users/${userId}/${Date.now()}-${file.name}`;
+    const fileRef = storage.file(filePath);
 
-    const newFile: Omit<FileData, 'id'> & { userId: string; uploadedAt: Date; storageUrl: string } = {
+    // Buffer the file in memory. For large files, consider streams.
+    const fileBuffer = await file.arrayBuffer();
+    
+    await fileRef.save(Buffer.from(fileBuffer), {
+      metadata: { contentType: file.type },
+    });
+    
+    // The Admin SDK's getDownloadURL is different. We make the file public and construct the URL.
+    await fileRef.makePublic();
+    const downloadURL = fileRef.publicUrl();
+
+    // Use a simpler object for Firestore, without client-side properties like `url`.
+    const newFile = {
       userId,
       name: file.name,
       size: file.size,
       uploadedAt: new Date(),
       storageUrl: downloadURL,
-      url: downloadURL,
+      storagePath: filePath, // Store the path for future deletions
     };
 
     await addDoc(collection(firestore, 'users', userId, 'files'), newFile);
@@ -95,6 +114,7 @@ export async function uploadFile(prevState: any, formData: FormData) {
     revalidatePath('/');
     return { message: `Successfully uploaded "${file.name}"`, success: true };
   } catch (error: any) {
+    console.error("Upload failed:", error);
     return { message: error.message || 'Failed to upload file.', success: false };
   }
 }
@@ -104,25 +124,28 @@ export async function deleteFile(fileId: string) {
   const userId = await getUserId();
   const fileDocRef = doc(firestore, 'users', userId, 'files', fileId);
 
-  // In a real app you would get the file path from the doc snapshot
-  // for now we will just assume the name is the path which is not correct
-  const fileToDelete = files.find((file) => file.id === fileId);
-  if (!fileToDelete) {
-      revalidatePath('/');
-      return { success: false, message: 'File not found.' };
-  }
-
   try {
-    // This is not quite right, we'd need to get the doc to get the full storage path
-    // But for now, we'll just delete the doc.
-    // const storageRef = ref(storage, `users/${userId}/${fileToDelete.name}`);
-    // await deleteObject(storageRef);
+    const fileDoc = await getDoc(fileDocRef);
+    if (!fileDoc.exists()) {
+      return { success: false, message: 'File not found.' };
+    }
     
+    const fileData = fileDoc.data();
+    const storagePath = fileData.storagePath;
+
+    // Delete the file from Cloud Storage if path is known
+    if (storagePath) {
+      const fileRef = storage.file(storagePath);
+      await fileRef.delete();
+    }
+    
+    // Delete the Firestore document
     await deleteDoc(fileDocRef);
 
     revalidatePath('/');
     return { success: true, message: `File has been deleted.` };
   } catch (error: any) {
+    console.error("Deletion failed:", error);
     return { success: false, message: 'Failed to delete file.' };
   }
 }
