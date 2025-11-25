@@ -29,11 +29,15 @@ export function FileActions({ file }: { file: FileData }) {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const handleDownload = () => {
-    // In a real app, this would initiate a download from file.url
-    toast({
-      title: "Download Started",
-      description: `Downloading "${file.name}"... (This is a demo)`,
-    });
+    if (file.url && file.url !== '#') {
+      window.open(file.url, '_blank');
+    } else {
+      toast({
+        title: "Download Not Available",
+        description: `The file "${file.name}" cannot be downloaded.`,
+        variant: "destructive",
+      });
+    }
   };
 
   const handleDelete = async () => {

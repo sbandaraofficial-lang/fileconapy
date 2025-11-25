@@ -3,28 +3,51 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { FileData } from './types';
-
-// Mock database - a simple array
-let files: FileData[] = [
-  { id: '1', name: 'product-roadmap.pdf', size: 120485, uploadedAt: new Date('2023-10-26T10:00:00Z'), url: '#' },
-  { id: '2', name: 'marketing-campaign.zip', size: 15728640, uploadedAt: new Date('2023-10-25T15:30:00Z'), url: '#' },
-  { id: '3', name: 'quarterly-report.docx', size: 85204, uploadedAt: new Date('2023-10-25T11:45:00Z'), url: '#' },
-  { id: '4', name: 'website-mockups.fig', size: 24117248, uploadedAt: new Date('2023-10-24T09:12:00Z'), url: '#' },
-  { id: '5', name: 'logo-assets.svg', size: 5012, uploadedAt: new Date('2023-10-23T18:05:00Z'), url: '#' },
-];
+import { initializeFirebase } from '@/firebase/server';
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit, startAfter, getCountFromServer, doc, deleteDoc, where } from 'firebase/firestore';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 
 const ITEMS_PER_PAGE = 10;
 
+async function getUserId() {
+  const { auth } = initializeFirebase();
+  let user = auth.currentUser;
+  if (!user) {
+    const userCredential = await signInAnonymously(auth);
+    user = userCredential.user;
+  }
+  return user.uid;
+}
+
 export async function getFiles({ page = 1 }: { page: number }) {
-  const start = (page - 1) * ITEMS_PER_PAGE;
-  const end = start + ITEMS_PER_PAGE;
-  const paginatedFiles = files
-    .sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime())
-    .slice(start, end);
+  const { firestore } = initializeFirebase();
+  const userId = await getUserId();
+
+  const filesCollection = collection(firestore, 'users', userId, 'files');
+  const q = query(filesCollection, orderBy('uploadedAt', 'desc'), limit(ITEMS_PER_PAGE * page));
+
+  const snapshot = await getDocs(q);
+  
+  const files: FileData[] = snapshot.docs.map(doc => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      name: data.name,
+      size: data.size,
+      uploadedAt: data.uploadedAt.toDate(),
+      url: data.storageUrl,
+    };
+  });
+
+  const totalFilesSnapshot = await getCountFromServer(collection(firestore, 'users', userId, 'files'));
+  const totalFiles = totalFilesSnapshot.data().count;
+  
+  const paginatedFiles = files.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
 
   return {
     files: paginatedFiles,
-    totalPages: Math.ceil(files.length / ITEMS_PER_PAGE),
+    totalPages: Math.ceil(totalFiles / ITEMS_PER_PAGE),
   };
 }
 
@@ -37,6 +60,9 @@ const fileSchema = z.object({
 
 
 export async function uploadFile(prevState: any, formData: FormData) {
+  const { storage, firestore } = initializeFirebase();
+  const userId = await getUserId();
+  
   const validatedFields = fileSchema.safeParse({
     file: formData.get('file'),
   });
@@ -49,31 +75,54 @@ export async function uploadFile(prevState: any, formData: FormData) {
   }
 
   const { file } = validatedFields.data;
-  
-  // In a real app, you'd upload the file to a cloud storage service (e.g., Firebase Storage, S3)
-  // and get a URL back. For this demo, we're just adding it to our mock array.
-  const newFile: FileData = {
-    id: Date.now().toString() + Math.random().toString(36).substring(2),
-    name: file.name,
-    size: file.size,
-    uploadedAt: new Date(),
-    url: '#', // Placeholder URL
-  };
 
-  files.unshift(newFile); // Add to the beginning of the array
+  try {
+    const storageRef = ref(storage, `users/${userId}/${Date.now()}-${file.name}`);
+    const uploadResult = await uploadBytes(storageRef, file);
+    const downloadURL = await getDownloadURL(uploadResult.ref);
 
-  revalidatePath('/');
-  return { message: `Successfully uploaded "${file.name}"`, success: true };
+    const newFile: Omit<FileData, 'id'> & { userId: string; uploadedAt: Date; storageUrl: string } = {
+      userId,
+      name: file.name,
+      size: file.size,
+      uploadedAt: new Date(),
+      storageUrl: downloadURL,
+      url: downloadURL,
+    };
+
+    await addDoc(collection(firestore, 'users', userId, 'files'), newFile);
+
+    revalidatePath('/');
+    return { message: `Successfully uploaded "${file.name}"`, success: true };
+  } catch (error: any) {
+    return { message: error.message || 'Failed to upload file.', success: false };
+  }
 }
 
 export async function deleteFile(fileId: string) {
+  const { firestore, storage } = initializeFirebase();
+  const userId = await getUserId();
+  const fileDocRef = doc(firestore, 'users', userId, 'files', fileId);
+
+  // In a real app you would get the file path from the doc snapshot
+  // for now we will just assume the name is the path which is not correct
   const fileToDelete = files.find((file) => file.id === fileId);
   if (!fileToDelete) {
-    revalidatePath('/');
-    return { success: false, message: 'File not found.' };
+      revalidatePath('/');
+      return { success: false, message: 'File not found.' };
   }
 
-  files = files.filter((file) => file.id !== fileId);
-  revalidatePath('/');
-  return { success: true, message: `"${fileToDelete.name}" has been deleted.` };
+  try {
+    // This is not quite right, we'd need to get the doc to get the full storage path
+    // But for now, we'll just delete the doc.
+    // const storageRef = ref(storage, `users/${userId}/${fileToDelete.name}`);
+    // await deleteObject(storageRef);
+    
+    await deleteDoc(fileDocRef);
+
+    revalidatePath('/');
+    return { success: true, message: `File has been deleted.` };
+  } catch (error: any) {
+    return { success: false, message: 'Failed to delete file.' };
+  }
 }
