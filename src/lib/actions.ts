@@ -15,7 +15,7 @@ async function getUserId() {
 }
 
 export async function getFiles({ page = 1 }: { page: number }) {
-  const { firestore } = initializeFirebase();
+  const { firestore } = await initializeFirebase();
   const userId = await getUserId();
 
   const filesCollection = firestore.collection(`users/${userId}/files`);
@@ -54,7 +54,7 @@ const fileSchema = z.object({
 
 
 export async function uploadFile(prevState: any, formData: FormData) {
-  const { storage, firestore } = initializeFirebase();
+  const { storage, firestore } = await initializeFirebase();
   const userId = await getUserId();
   
   const validatedFields = fileSchema.safeParse({
@@ -105,7 +105,7 @@ export async function uploadFile(prevState: any, formData: FormData) {
 }
 
 export async function deleteFile(fileId: string) {
-  const { firestore, storage } = initializeFirebase();
+  const { firestore, storage } = await initializeFirebase();
   const userId = await getUserId();
   const fileDocRef = firestore.doc(`users/${userId}/files/${fileId}`);
 
