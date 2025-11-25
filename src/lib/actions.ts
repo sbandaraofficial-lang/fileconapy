@@ -4,20 +4,16 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import type { FileData } from './types';
 import { initializeFirebase } from '@/firebase/server';
-import { getDownloadURL, deleteObject } from 'firebase/storage';
 import { 
-  getFirestore, 
   collection, 
   addDoc, 
   getDocs, 
   query, 
   orderBy, 
-  limit, 
-  getCountFromServer, 
   doc, 
   deleteDoc,
   getDoc
-} from 'firebase/firestore';
+} from 'firebase-admin/firestore';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -126,7 +122,7 @@ export async function deleteFile(fileId: string) {
 
   try {
     const fileDoc = await getDoc(fileDocRef);
-    if (!fileDoc.exists()) {
+    if (!fileDoc.exists) {
       return { success: false, message: 'File not found.' };
     }
     
